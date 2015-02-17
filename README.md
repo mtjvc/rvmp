@@ -1,1 +1,1 @@
-# trash_metal
+Reanalysis of RAVE metal-poor sample

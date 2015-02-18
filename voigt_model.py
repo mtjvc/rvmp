@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import sys
+import multiprocessing
 
 import numpy as np
 import matplotlib.pyplot as pl
@@ -68,19 +69,12 @@ def lnprior(p):
 
 
 def lnprob(p, x, y, yerr, nwalkers):
-    global itercount
-
-    sys.stdout.write("\rIteration: %.0f" % (itercount / float(nwalkers)))
-    sys.stdout.flush()
-    itercount += 1
-
     lp = lnprior(p)
     return lp + lnlike(p, x, y, yerr) if np.isfinite(lp) else -np.inf
 
 
 def run(raveid, snr, wlwidth=12, nwalkers=128, initial=None, preruniter=10,
         finaliter=10, calc_snr=False):
-    global itercount
 
     a = raveid.split('_')
     fn = create_rave_filename(a[0], a[1], int(a[2]))
@@ -125,21 +119,20 @@ def run(raveid, snr, wlwidth=12, nwalkers=128, initial=None, preruniter=10,
     data = [x, y, yerr, nwalkers]
     sampler = emcee.EnsembleSampler(nwalkers, ndim, lnprob, args=data)
 
-    itercount = 0
+    print 'Starting %s...' % raveid
+
     p0, lnp, _ = sampler.run_mcmc(p0, preruniter)
     sampler.reset()
-    print '\n First run done.'
+    print 'First run done.'
 
-    itercount = 0
     p = p0[np.argmax(lnp)]
     p0 = [p + 1e-2 * np.random.randn(ndim) for i in xrange(nwalkers)]
     p0, _, _ = sampler.run_mcmc(p0, preruniter)
     sampler.reset()
-    print '\n Second run done.'
+    print 'Second run done.'
 
-    itercount = 0
     p0, _, _ = sampler.run_mcmc(p0, finaliter)
-    print '\n Finished.'
+    print 'Finished %s.' % raveid
 
     samples = sampler.flatchain
 
@@ -178,8 +171,8 @@ def run(raveid, snr, wlwidth=12, nwalkers=128, initial=None, preruniter=10,
     return samples, sampler.flatlnprobability
 
 
-def plot_samples(raveid, snr, samples, lnproblty, wlwidth=12, size=10,
-                 ysh=[0., 0., 0.]):
+def plot_samples(raveid, snr, samples, lnproblty, outdir, nr, wlwidth=12,
+                 size=10, ysh=[0., 0., 0.]):
     a = raveid.split('_')
     fn = create_rave_filename(a[0], a[1], int(a[2]))
 
@@ -248,61 +241,85 @@ def plot_samples(raveid, snr, samples, lnproblty, wlwidth=12, size=10,
         pl.fill_between(xs - CaT_lines[i], y1, y2, color='r', alpha=0.3)
 
     pl.ylim(0.5, 2.0)
+    pl.savefig(outdir + '%s.%d.png' % (raveid, nr))
+    pl.clf()
 
-    # pl.figure(figsize=(14, 3))
-    # for sc, s in enumerate(samples.T):
-    #     print s
-    #     ax = pl.subplot(2, 8, sc + 1)
-    #     pl.hist(s[::30], bins=50, histtype='step')
-    #     for label in (ax.get_xticklabels() + ax.get_yticklabels()):
-    #         label.set_fontsize(6)
-    # label.set_fontsize(13)
+    # pl.figure()
+    # a = lnproblty.reshape((nwalkers, 5000))
+    # for i in a:
+    #     pl.plot(i, 'k', alpha=0.1, lw=3)
+    # m = [np.median(i) for i in a.T]
+    # pl.plot(m, 'r')
+    # pl.savefig(outdir + '%s.%d.chain.png')
 
-    samples = np.array([np.array(i[:6]) for i in
-                        samples[np.random.randint(len(samples),
-                                size=len(samples) / 20)]])
-    triangle.corner(samples)
+    if nr == 2:
+        plotsamples = np.array([np.array(i[:6]) for i in
+                                samples[np.random.randint(len(samples),
+                                        size=len(samples) / 20)]])
+        triangle.corner(plotsamples)
+        pl.savefig(outdir + '%s.%d.tri.kernelpars.png' % (raveid, nr))
+        pl.clf()
 
-    pl.show()
+        for j in range(3):
+            plotsamples = np.array([np.array(i[7 + j:10 + j]) for i in
+                                    samples[np.random.randint(len(samples),
+                                            size=len(samples) / 20)]])
+            triangle.corner(plotsamples)
+            pl.savefig(outdir + '%s.%d.tri.linepars.%d.png' % (raveid, nr, j))
+            pl.clf()
+    pl.close()
 
 
-def pipeline(raveid, snr):
+def pipeline(raveid, snr, outdir):
 
     nwalkers = 128
     # Prerun (mostly to get a better SNR estimate)
     samples, lnproblty, snr = run(raveid, snr, nwalkers=nwalkers,
-                                  preruniter=100, finaliter=100,
+                                  preruniter=10, finaliter=10,
                                   calc_snr=True)
 
-    # Use best sample from the prerun as a better intial estimate
+    # Use best sample from the prerun as a better initial estimate
     initial = samples[np.argmax(lnproblty)]
 
-    f = open('%s.1.npy' % raveid, 'wb')
+    f = open(outdir + '%s.1.npy' % raveid, 'wb')
     np.save(f, np.array([samples, lnproblty, snr]))
     f.close()
 
-    plot_samples(raveid, snr, samples, lnproblty, size=100,
+    plot_samples(raveid, snr, samples, lnproblty, outdir, 1, size=100,
                  ysh=[0.0, 0.45, 0.4])
 
     # Production run
     samples, lnproblty, snr = run(raveid, snr, nwalkers=nwalkers,
-                                  initial=initial, preruniter=100,
-                                  finaliter=100, calc_snr=True)
+                                  initial=initial, preruniter=10,
+                                  finaliter=20, calc_snr=True)
 
-    f = open('%s.2.npy' % raveid, 'wb')
+    f = open(outdir + '%s.2.npy' % raveid, 'wb')
     np.save(f, np.array([samples, lnproblty, snr]))
     f.close()
 
-    plot_samples(raveid, snr, samples, lnproblty, size=100,
+    plot_samples(raveid, snr, samples, lnproblty, outdir, 2, size=100,
                  ysh=[0.0, 0.45, 0.4])
+
+
+def worker(p):
+    try:
+        pipeline(*p)
+    except:
+        import traceback
+        traceback.print_exc()
+        raise
 
 
 if __name__ == '__main__':
     # raveid = '20121217_0356m54_109'
-    raveid = '20040409_1200m15_140'
-    snr = 26.0
+    # raveid = '20040409_1200m15_140'
+    # snr = 26.0
+    p = [['20121217_0356m54_109', 59.0, 'trash_metal/test/']]
+    # p = [['20121217_0356m54_109', 59.0], ['20040409_1200m15_140', 26.0]]
 
-    pipeline(raveid, snr)
+    # pool = multiprocessing.Pool()
+    map(worker, p)
+    # pipeline(raveid, snr)
 
     # if 0:
     #     samples, lnproblty, snr = run(raveid, snr, preruniter=20,

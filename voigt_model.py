@@ -171,8 +171,8 @@ def run(raveid, snr, wlwidth=12, nwalkers=128, initial=None, preruniter=10,
     return samples, sampler.flatlnprobability
 
 
-def plot_samples(raveid, snr, samples, lnproblty, outdir, nr, wlwidth=12,
-                 size=10, ysh=[0., 0., 0.]):
+def plot_samples(raveid, snr, samples, lnproblty, nwalkers, outdir, nr,
+                 wlwidth=12, size=10, ysh=[0., 0., 0.]):
     a = raveid.split('_')
     fn = create_rave_filename(a[0], a[1], int(a[2]))
 
@@ -244,13 +244,13 @@ def plot_samples(raveid, snr, samples, lnproblty, outdir, nr, wlwidth=12,
     pl.savefig(outdir + '%s.%d.png' % (raveid, nr))
     pl.clf()
 
-    # pl.figure()
-    # a = lnproblty.reshape((nwalkers, 5000))
-    # for i in a:
-    #     pl.plot(i, 'k', alpha=0.1, lw=3)
-    # m = [np.median(i) for i in a.T]
-    # pl.plot(m, 'r')
-    # pl.savefig(outdir + '%s.%d.chain.png')
+    pl.figure()
+    chns = lnproblty.reshape((nwalkers, len(samples) / nwalkers))
+    for c in chns:
+        pl.plot(c, 'k', alpha=0.1, lw=3)
+    med = [np.median(i) for i in chns.T]
+    pl.plot(med, 'r')
+    pl.savefig(outdir + '%s.%d.chain.png' % (raveid, nr))
 
     if nr == 2:
         plotsamples = np.array([np.array(i[:6]) for i in
@@ -285,8 +285,8 @@ def pipeline(raveid, snr, outdir):
     np.save(f, np.array([samples, lnproblty, snr]))
     f.close()
 
-    plot_samples(raveid, snr, samples, lnproblty, outdir, 1, size=100,
-                 ysh=[0.0, 0.45, 0.4])
+    plot_samples(raveid, snr, samples, lnproblty, nwalkers, outdir, 1,
+                 size=100, ysh=[0.0, 0.45, 0.4])
 
     # Production run
     samples, lnproblty, snr = run(raveid, snr, nwalkers=nwalkers,
@@ -297,39 +297,9 @@ def pipeline(raveid, snr, outdir):
     np.save(f, np.array([samples, lnproblty, snr]))
     f.close()
 
-    plot_samples(raveid, snr, samples, lnproblty, outdir, 2, size=100,
-                 ysh=[0.0, 0.45, 0.4])
+    plot_samples(raveid, snr, samples, lnproblty, nwalkers, outdir, 2,
+                 size=100, ysh=[0.0, 0.45, 0.4])
 
 
-def worker(p):
-    try:
-        pipeline(*p)
-    except:
-        import traceback
-        traceback.print_exc()
-        raise
-
-
-if __name__ == '__main__':
-    # raveid = '20121217_0356m54_109'
-    # raveid = '20040409_1200m15_140'
-    # snr = 26.0
-    p = [['20121217_0356m54_109', 59.0, 'trash_metal/test/']]
-    # p = [['20121217_0356m54_109', 59.0], ['20040409_1200m15_140', 26.0]]
-
-    # pool = multiprocessing.Pool()
-    map(worker, p)
-    # pipeline(raveid, snr)
-
-    # if 0:
-    #     samples, lnproblty, snr = run(raveid, snr, preruniter=20,
-    #                                   finaliter=50, calc_snr=True)
-    #     f = open('%s.1.npy' % raveid, 'wb')
-    #     np.save(f, np.array([samples, lnproblty, snr]))
-    #     f.close()
-    # else:
-    #     samples, lnproblty, snr = np.load('%s.1.npy' % raveid)
-    #
-    # print snr
-    # plot_samples(raveid, snr, samples, lnproblty,
-    #              size=20, ysh=[0.0, 0.45, 0.4])
+def pipeline_worker(p):
+    pipeline(*p)

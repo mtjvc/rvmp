@@ -21,6 +21,8 @@ CaT_lines = [8498.02, 8542.09, 8662.14]
 
 def lnlike(p, x, y, yerr):
     a, alpha, b, beta, c, zeta = np.exp(p[:6])
+
+    # Three ExpSquared kernels to model three different wiggle scales
     gp = george.GP(a * kernels.ExpSquaredKernel(alpha) +
                    b * kernels.ExpSquaredKernel(beta) +
                    c * kernels.ExpSquaredKernel(zeta))
@@ -48,7 +50,8 @@ def lnlike(p, x, y, yerr):
 def lnprior(p):
     lna, lnalpha, lnb, lnbeta, lnc, lnzeta, xcen,\
         amp1, sigma1, gamma1, amp2, sigma2, gamma2, amp3, sigma3, gamma3 = p
-    # Gaussian priors center at different wiggle lengths
+
+    # Gaussian priors centered at different wiggle scales
     lnp = 0.0
     lnp += -(lnalpha + 0.5) ** 2 / (2 * 0.6 ** 2)
     lnp += -(lnbeta - 1.25) ** 2 / (2 * 0.8 ** 2)
@@ -60,6 +63,7 @@ def lnprior(p):
         and sigma1 > 0. and sigma2 > 0. and sigma3 > 0.
         and gamma1 > 0. and gamma2 > 0. and gamma3 > 0.):
         return lnp
+
     return -np.inf
 
 
@@ -81,6 +85,8 @@ def run(raveid, snr, wlwidth=12, nwalkers=128, initial=None, preruniter=10,
     a = raveid.split('_')
     fn = create_rave_filename(a[0], a[1], int(a[2]))
 
+    # Use a single value for initial SNR estimate and use different value
+    # for each line once there is a better estimate
     try:
         len(snr)
     except TypeError:
@@ -96,6 +102,7 @@ def run(raveid, snr, wlwidth=12, nwalkers=128, initial=None, preruniter=10,
     except IOError:
         return
 
+    # Select only wlwidth wide range left and right from each line
     sel = [[], []]
     for i in range(3):
         sel[0].append(spec.x[(spec.x > CaT_lines[i] - wlwidth) &
@@ -109,6 +116,8 @@ def run(raveid, snr, wlwidth=12, nwalkers=128, initial=None, preruniter=10,
     ndim = len(initial)
     p0 = np.array([np.array(initial) + 1e-2 * np.random.randn(ndim)
                    for i in xrange(nwalkers)])
+
+    # Box-randomize amplitudes to speed-up the convergence
     p0[:, 0] = np.random.rand(nwalkers) * 30 - 35
     p0[:, 2] = np.random.rand(nwalkers) * 30 - 35
     p0[:, 4] = np.random.rand(nwalkers) * 30 - 35
@@ -262,7 +271,7 @@ def pipeline(raveid, snr):
     nwalkers = 128
     # Prerun (mostly to get a better SNR estimate)
     samples, lnproblty, snr = run(raveid, snr, nwalkers=nwalkers,
-                                  preruniter=10, finaliter=10,
+                                  preruniter=100, finaliter=100,
                                   calc_snr=True)
 
     # Use best sample from the prerun as a better intial estimate
@@ -277,8 +286,8 @@ def pipeline(raveid, snr):
 
     # Production run
     samples, lnproblty, snr = run(raveid, snr, nwalkers=nwalkers,
-                                  initial=initial, preruniter=10,
-                                  finaliter=10, calc_snr=True)
+                                  initial=initial, preruniter=100,
+                                  finaliter=100, calc_snr=True)
 
     f = open('%s.2.npy' % raveid, 'wb')
     np.save(f, np.array([samples, lnproblty, snr]))

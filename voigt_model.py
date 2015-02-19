@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 
 import sys
-import multiprocessing
 
 import numpy as np
 import matplotlib.pyplot as pl
@@ -196,7 +195,7 @@ def plot_samples(raveid, snr, samples, lnproblty, nwalkers, outdir, nr,
     x, y, yerr = sel[0], sel[1],\
         [i[1] / i[0] for i in zip(snr, np.ones_like(sel[0]))]
 
-    pl.figure()
+    fig = pl.figure()
 
     for i in range(3):
         gpmodels = []
@@ -242,15 +241,18 @@ def plot_samples(raveid, snr, samples, lnproblty, nwalkers, outdir, nr,
 
     pl.ylim(0.5, 2.0)
     pl.savefig(outdir + '%s.%d.png' % (raveid, nr))
-    pl.clf()
+    fig.clf()
+    pl.close(fig)
 
-    pl.figure()
+    fig = pl.figure()
     chns = lnproblty.reshape((nwalkers, len(samples) / nwalkers))
     for c in chns:
         pl.plot(c, 'k', alpha=0.1, lw=3)
     med = [np.median(i) for i in chns.T]
     pl.plot(med, 'r')
     pl.savefig(outdir + '%s.%d.chain.png' % (raveid, nr))
+    fig.clf()
+    pl.close(fig)
 
     if nr == 2:
         plotsamples = np.array([np.array(i[:6]) for i in
@@ -267,7 +269,6 @@ def plot_samples(raveid, snr, samples, lnproblty, nwalkers, outdir, nr,
             triangle.corner(plotsamples)
             pl.savefig(outdir + '%s.%d.tri.linepars.%d.png' % (raveid, nr, j))
             pl.clf()
-    pl.close()
 
 
 def pipeline(raveid, snr, outdir):
@@ -275,7 +276,7 @@ def pipeline(raveid, snr, outdir):
     nwalkers = 128
     # Prerun (mostly to get a better SNR estimate)
     samples, lnproblty, snr = run(raveid, snr, nwalkers=nwalkers,
-                                  preruniter=10, finaliter=10,
+                                  preruniter=200, finaliter=500,
                                   calc_snr=True)
 
     # Use best sample from the prerun as a better initial estimate
@@ -290,8 +291,8 @@ def pipeline(raveid, snr, outdir):
 
     # Production run
     samples, lnproblty, snr = run(raveid, snr, nwalkers=nwalkers,
-                                  initial=initial, preruniter=10,
-                                  finaliter=20, calc_snr=True)
+                                  initial=initial, preruniter=1000,
+                                  finaliter=5000, calc_snr=True)
 
     f = open(outdir + '%s.2.npy' % raveid, 'wb')
     np.save(f, np.array([samples, lnproblty, snr]))

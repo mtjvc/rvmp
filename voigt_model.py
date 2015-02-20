@@ -19,31 +19,40 @@ import triangle
 CaT_lines = [8498.02, 8542.09, 8662.14]
 
 
-def lnlike(p, x, y, yerr):
-    a, alpha, b, beta, c, zeta = np.exp(p[:6])
+def lnlike(p, x, y, yerr, usegp):
+    if usegp:
+        # Use GPs to model the noise
+        st = 6
+        a, alpha, b, beta, c, zeta = np.exp(p[:6])
 
-    # Three ExpSquared kernels to model three different wiggle scales
-    gp = george.GP(a * kernels.ExpSquaredKernel(alpha) +
-                   b * kernels.ExpSquaredKernel(beta) +
-                   c * kernels.ExpSquaredKernel(zeta))
+        # Three ExpSquared kernels to model three different wiggle scales
+        gp = george.GP(a * kernels.ExpSquaredKernel(alpha) +
+                       b * kernels.ExpSquaredKernel(beta) +
+                       c * kernels.ExpSquaredKernel(zeta))
+    else:
+        st = 0
 
     lnl = 0.0
     for i in range(3):
-        pos = CaT_lines[i] + p[6]
-        amp = p[7 + i * 3]
-        sigma = p[8 + i * 3]
-        gamma = p[9 + i * 3]
+        pos = CaT_lines[i] + p[st]
+        amp = p[st + 1 + i * 3]
+        sigma = p[st + 2 + i * 3]
+        gamma = p[st + 3 + i * 3]
 
-        try:
-            gp.compute(x[i], yerr[i])
-        except np.linalg.linalg.LinAlgError, ValueError:
-            return -np.inf
+        if usegp:
+            try:
+                gp.compute(x[i], yerr[i])
+            except np.linalg.linalg.LinAlgError, ValueError:
+                return -np.inf
         v = voigt(x[i], amp, pos, sigma, gamma)
         if np.inf in abs(v):
             lnl = -np.inf
         else:
-            lnl += gp.lnlikelihood(y[i] + v - 1, quiet=True)
-
+            if usegp:
+                lnl += gp.lnlikelihood(y[i] + v - 1, quiet=True)
+            else:
+                lnl += -0.5 * (np.sum(((y[i] + v - 1) /
+                               yerr[i]) ** 2))
     return lnl
 
 
@@ -67,13 +76,29 @@ def lnprior(p):
     return -np.inf
 
 
-def lnprob(p, x, y, yerr, nwalkers):
-    lp = lnprior(p)
+def lnprior_wogp(p):
+    xcen, amp1, sigma1, gamma1, amp2, sigma2, gamma2,
+    amp3, sigma3, gamma3 = p
+
+    if (-5. < xcen < 5.
+        and amp1 > 0. and amp2 > 0. and amp3 > 0.
+        and sigma1 > 0. and sigma2 > 0. and sigma3 > 0.
+        and gamma1 > 0. and gamma2 > 0. and gamma3 > 0.):
+        return lnp
+
+    return -np.inf
+
+
+def lnprob(p, x, y, yerr, nwalkers, usegp):
+    if usegp:
+        lp = lnprior(p)
+    else:
+        lp = lnprior_wogp(p)
     return lp + lnlike(p, x, y, yerr) if np.isfinite(lp) else -np.inf
 
 
 def run(raveid, snr, wlwidth=12, nwalkers=128, initial=None, preruniter=10,
-        finaliter=10, calc_snr=False):
+        finaliter=10, calc_snr=False, usegp=True):
 
     a = raveid.split('_')
     fn = create_rave_filename(a[0], a[1], int(a[2]))
@@ -87,8 +112,14 @@ def run(raveid, snr, wlwidth=12, nwalkers=128, initial=None, preruniter=10,
 
     # generic initial conditions if not given
     if initial is None:
-        initial = np.array([-9.0, -0.5, -8.0, 1.25, -8.0, 3.0, 0.0, 0.6, 0.3,
-                            0.6, 1.1, 0.4, 0.7, 1.1, 0.3, 0.7])
+        if usegp:
+            st = 6
+            initial = np.array([-9.0, -0.5, -8.0, 1.25, -8.0, 3.0, 0.0, 0.6,
+                                0.3, 0.6, 1.1, 0.4, 0.7, 1.1, 0.3, 0.7])
+        else:
+            st = 0
+            initial = np.array([0.0, 0.6, 0.3, 0.6, 1.1, 0.4, 0.7, 1.1, 0.3,
+                                0.7])
 
     try:
         spec = Spectrum(fn)
@@ -111,9 +142,10 @@ def run(raveid, snr, wlwidth=12, nwalkers=128, initial=None, preruniter=10,
                    for i in xrange(nwalkers)])
 
     # Box-randomize amplitudes to speed-up the convergence
-    p0[:, 0] = np.random.rand(nwalkers) * 30 - 35
-    p0[:, 2] = np.random.rand(nwalkers) * 30 - 35
-    p0[:, 4] = np.random.rand(nwalkers) * 30 - 35
+    if usegp:
+        p0[:, 0] = np.random.rand(nwalkers) * 30 - 35
+        p0[:, 2] = np.random.rand(nwalkers) * 30 - 35
+        p0[:, 4] = np.random.rand(nwalkers) * 30 - 35
 
     data = [x, y, yerr, nwalkers]
     sampler = emcee.EnsembleSampler(nwalkers, ndim, lnprob, args=data)
@@ -139,31 +171,37 @@ def run(raveid, snr, wlwidth=12, nwalkers=128, initial=None, preruniter=10,
     if calc_snr:
         nsnr = []
         for i in range(3):
-            gpmodels = []
+            models = []
             for s in samples[np.random.randint(len(samples), size=100)]:
-                pos = CaT_lines[i] + s[6]
-                amp = s[7 + i * 3]
-                sigma = s[8 + i * 3]
-                gamma = s[9 + i * 3]
-
-                # Use only the second and the third kernel
-                gp = george.GP(
-                    # np.exp(s[0]) * kernels.ExpSquaredKernel(np.exp(s[1])) +
-                    np.exp(s[2]) * kernels.ExpSquaredKernel(np.exp(s[3])) +
-                    np.exp(s[4]) * kernels.ExpSquaredKernel(np.exp(s[5])))
-                gp.compute(x[i], yerr[i])
+                pos = CaT_lines[i] + s[st]
+                amp = s[st + 1 + i * 3]
+                sigma = s[st + 2 + i * 3]
+                gamma = s[st + 3 + i * 3]
 
                 m1 = 1 - voigt(x[i], amp, pos, sigma, gamma)
-                m2 = gp.sample_conditional(y[i] - 1 +
-                                           voigt(x[i], amp, pos, sigma, gamma),
-                                           x[i]) + m1
-                gpmodels.append(m2)
 
-            gpa = np.array(gpmodels).T
-            gpavg = np.average(gpa, axis=1)
+                if usegp:
+                    # Use only the second and the third kernel
+                    gp = george.GP(
+                        # np.exp(s[0]) *
+                        #kernels.ExpSquaredKernel(np.exp(s[1])) +
+                        np.exp(s[2]) * kernels.ExpSquaredKernel(np.exp(s[3])) +
+                        np.exp(s[4]) * kernels.ExpSquaredKernel(np.exp(s[5])))
+                    gp.compute(x[i], yerr[i])
+
+                    m2 = gp.sample_conditional(y[i] - 1 +
+                                               voigt(x[i], amp, pos,
+                                                     sigma, gamma),
+                                               x[i]) + m1
+                    models.append(m2)
+                else:
+                    models.append(m1)
+
+            ma = np.array(models).T
+            mavg = np.average(ma, axis=1)
 
             # New SNR is 1 / sigma of the residuals
-            nsnr.append(1.0 / np.std(y[i] - gpavg))
+            nsnr.append(1.0 / np.std(y[i] - mavg))
 
         return samples, sampler.flatlnprobability, np.array(nsnr)
 
@@ -172,6 +210,8 @@ def run(raveid, snr, wlwidth=12, nwalkers=128, initial=None, preruniter=10,
 
 def plot_samples(raveid, snr, samples, lnproblty, nwalkers, outdir, nr,
                  wlwidth=12, size=10, ysh=[0., 0., 0.]):
+    # Only works wiht GP samples
+
     a = raveid.split('_')
     fn = create_rave_filename(a[0], a[1], int(a[2]))
 
@@ -272,7 +312,8 @@ def plot_samples(raveid, snr, samples, lnproblty, nwalkers, outdir, nr,
 
 
 def pipeline(raveid, snr, outdir):
-
+    # Only works with GP samples
+    
     nwalkers = 128
     # Prerun (mostly to get a better SNR estimate)
     samples, lnproblty, snr = run(raveid, snr, nwalkers=nwalkers,

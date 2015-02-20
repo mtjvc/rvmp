@@ -16,6 +16,7 @@ import emcee
 import triangle
 
 
+# Wavelengts sourced from NIST ASD database
 CaT_lines = [8498.02, 8542.09, 8662.14]
 
 
@@ -77,14 +78,14 @@ def lnprior(p):
 
 
 def lnprior_wogp(p):
-    xcen, amp1, sigma1, gamma1, amp2, sigma2, gamma2,
-    amp3, sigma3, gamma3 = p
+    xcen, amp1, sigma1, gamma1, amp2, sigma2, gamma2, \
+        amp3, sigma3, gamma3 = p
 
     if (-5. < xcen < 5.
         and amp1 > 0. and amp2 > 0. and amp3 > 0.
         and sigma1 > 0. and sigma2 > 0. and sigma3 > 0.
         and gamma1 > 0. and gamma2 > 0. and gamma3 > 0.):
-        return lnp
+        return 0.0
 
     return -np.inf
 
@@ -94,7 +95,7 @@ def lnprob(p, x, y, yerr, nwalkers, usegp):
         lp = lnprior(p)
     else:
         lp = lnprior_wogp(p)
-    return lp + lnlike(p, x, y, yerr) if np.isfinite(lp) else -np.inf
+    return lp + lnlike(p, x, y, yerr, usegp) if np.isfinite(lp) else -np.inf
 
 
 def run(raveid, snr, wlwidth=12, nwalkers=128, initial=None, preruniter=10,
@@ -147,7 +148,7 @@ def run(raveid, snr, wlwidth=12, nwalkers=128, initial=None, preruniter=10,
         p0[:, 2] = np.random.rand(nwalkers) * 30 - 35
         p0[:, 4] = np.random.rand(nwalkers) * 30 - 35
 
-    data = [x, y, yerr, nwalkers]
+    data = [x, y, yerr, nwalkers, usegp]
     sampler = emcee.EnsembleSampler(nwalkers, ndim, lnprob, args=data)
 
     print 'Starting %s...' % raveid
@@ -209,9 +210,7 @@ def run(raveid, snr, wlwidth=12, nwalkers=128, initial=None, preruniter=10,
 
 
 def plot_samples(raveid, snr, samples, lnproblty, nwalkers, outdir, nr,
-                 wlwidth=12, size=10, ysh=[0., 0., 0.]):
-    # Only works wiht GP samples
-
+                 wlwidth=12, size=10, ysh=[0., 0., 0.], usegp=True):
     a = raveid.split('_')
     fn = create_rave_filename(a[0], a[1], int(a[2]))
 
@@ -237,31 +236,39 @@ def plot_samples(raveid, snr, samples, lnproblty, nwalkers, outdir, nr,
 
     fig = pl.figure()
 
+    ews = []
     for i in range(3):
-        gpmodels = []
+        if usegp:
+            gpmodels = []
+            st = 6
+        else:
+            st = 0
         linemodels = []
         ew = []
         xs = np.linspace(CaT_lines[i] - wlwidth, CaT_lines[i] + wlwidth, 200)
         for s in samples[np.random.randint(len(samples), size=size)]:
-            pos = CaT_lines[i] + s[6]
-            amp = s[7 + i * 3]
-            sigma = s[8 + i * 3]
-            gamma = s[9 + i * 3]
-
-            gp = george.GP(
-                np.exp(s[0]) * kernels.ExpSquaredKernel(np.exp(s[1])) +
-                np.exp(s[2]) * kernels.ExpSquaredKernel(np.exp(s[3])) +
-                np.exp(s[4]) * kernels.ExpSquaredKernel(np.exp(s[5])))
-            gp.compute(x[i], yerr[i])
+            pos = CaT_lines[i] + s[st]
+            amp = s[st + 1 + i * 3]
+            sigma = s[st + 2 + i * 3]
+            gamma = s[st + 3 + i * 3]
 
             m1 = 1 - voigt(xs, amp, pos, sigma, gamma)
-            m2 = gp.sample_conditional(y[i] - 1 +
-                                       voigt(x[i], amp, pos, sigma, gamma),
-                                       xs) + m1
             linemodels.append(m1)
-            gpmodels.append(m2)
+
+            if usegp:
+                gp = george.GP(
+                    np.exp(s[0]) * kernels.ExpSquaredKernel(np.exp(s[1])) +
+                    np.exp(s[2]) * kernels.ExpSquaredKernel(np.exp(s[3])) +
+                    np.exp(s[4]) * kernels.ExpSquaredKernel(np.exp(s[5])))
+                gp.compute(x[i], yerr[i])
+
+                m2 = gp.sample_conditional(y[i] - 1 +
+                                           voigt(x[i], amp, pos, sigma, gamma),
+                                           xs) + m1
+                gpmodels.append(m2)
             ew.append(np.sum(1 - m1[1:]) * (xs[1:] - xs[:-1]))
 
+        ews.append((np.average(ew), np.std(ew)))
         pl.errorbar(x[i] - CaT_lines[i], y[i] + i * ysh[i], yerr=yerr[i],
                     fmt=".k", capsize=0)
         pl.text(-12., 1.07 + i * ysh[i], '%.2f +- %.2f A' %
@@ -273,11 +280,12 @@ def plot_samples(raveid, snr, samples, lnproblty, nwalkers, outdir, nr,
         y1, y2 = lavg + lstd + i * ysh[i], lavg - lstd + i * ysh[i]
         pl.fill_between(xs - CaT_lines[i], y1, y2, alpha=0.3)
 
-        gpa = np.array(gpmodels).T
-        gpstd = np.std(gpa, axis=1)
-        gpavg = np.average(gpa, axis=1)
-        y1, y2 = gpavg + gpstd + i * ysh[i], gpavg - gpstd + i * ysh[i]
-        pl.fill_between(xs - CaT_lines[i], y1, y2, color='r', alpha=0.3)
+        if usegp:
+            gpa = np.array(gpmodels).T
+            gpstd = np.std(gpa, axis=1)
+            gpavg = np.average(gpa, axis=1)
+            y1, y2 = gpavg + gpstd + i * ysh[i], gpavg - gpstd + i * ysh[i]
+            pl.fill_between(xs - CaT_lines[i], y1, y2, color='r', alpha=0.3)
 
     pl.ylim(0.5, 2.0)
     pl.savefig(outdir + '%s.%d.png' % (raveid, nr))
@@ -294,7 +302,7 @@ def plot_samples(raveid, snr, samples, lnproblty, nwalkers, outdir, nr,
     fig.clf()
     pl.close(fig)
 
-    if nr == 2:
+    if nr == 2 and usegp:
         plotsamples = np.array([np.array(i[:6]) for i in
                                 samples[np.random.randint(len(samples),
                                         size=len(samples) / 20)]])
@@ -310,10 +318,12 @@ def plot_samples(raveid, snr, samples, lnproblty, nwalkers, outdir, nr,
             pl.savefig(outdir + '%s.%d.tri.linepars.%d.png' % (raveid, nr, j))
             pl.clf()
 
+    return ews
+
 
 def pipeline(raveid, snr, outdir):
     # Only works with GP samples
-    
+
     nwalkers = 128
     # Prerun (mostly to get a better SNR estimate)
     samples, lnproblty, snr = run(raveid, snr, nwalkers=nwalkers,
@@ -345,3 +355,21 @@ def pipeline(raveid, snr, outdir):
 
 def pipeline_worker(p):
     pipeline(*p)
+
+
+if __name__ == '__main__':
+    test_gp = False
+    raveid = '20060521_1742m83_109'
+    snr = 60.0
+    outdir = 'trash_metal/test/'
+
+    if test_gp:
+        samples, lnproblty = run(raveid, snr, nwalkers=128, preruniter=500,
+                                 finaliter=500)
+        plot_samples(raveid, snr, samples, lnproblty, 128, outdir, 2,
+                     ysh=[0.0, 0.45, 0.4])
+    else:
+        samples, lnproblty = run(raveid, snr, nwalkers=128, preruniter=200,
+                                 finaliter=500, usegp=False)
+        ews = plot_samples(raveid, snr, samples, lnproblty, 128, outdir, 2,
+                           ysh=[0.0, 0.45, 0.4], usegp=False, size=100)

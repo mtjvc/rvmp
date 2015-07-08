@@ -1,1 +1,1 @@
-#Reanalysis of RAVE metal-poor sample
+#Reanalysis of RAVE very metal-poor sample
